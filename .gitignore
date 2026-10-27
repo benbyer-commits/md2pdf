@@ -13,3 +13,6 @@ node_modules/
 # Build & Test Outputs
 *.pdf
 coverage/
+
+# Lock files
+*lock*
