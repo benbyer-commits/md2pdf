@@ -1,0 +1,100 @@
+{
+  "project": "md2pdf",
+  "phase": 1,
+  "version": "1.0.0",
+  "tasks": [
+    {
+      "id": "TASK-01",
+      "title": "Repository Initialization & Dependencies",
+      "description": "Initialize package.json, configure ES modules/CommonJS, set up executable entry point in package.json, and install required production dependencies.",
+      "target_files": [
+        "package.json"
+      ],
+      "dependencies": [],
+      "action_items": [
+        "Create package.json with name 'md2pdf' and version '1.0.0'.",
+        "Set 'bin' entry pointing to './bin/index.js'.",
+        "Install production dependencies: 'commander', 'marked', 'puppeteer'.",
+        "Install dev dependencies: 'jest' (or equivalent test runner)."
+      ],
+      "acceptance_criteria": "package.json contains all required dependencies and bin configuration."
+    },
+    {
+      "id": "TASK-02",
+      "title": "Core Parsing Engine Implementation",
+      "description": "Create the parser module that converts raw Markdown strings into standard HTML document strings.",
+      "target_files": [
+        "src/parser.js"
+      ],
+      "dependencies": [
+        "TASK-01"
+      ],
+      "action_items": [
+        "Export a function `parseMarkdownToHtml(markdownString)`.",
+        "Use `marked` to convert Markdown content into HTML elements.",
+        "Wrap converted HTML in a valid HTML5 document structure (`<!DOCTYPE html><html><head></head><body>...</body></html>`).",
+        "Include basic CSS print resets in `<head>` to normalize body margins."
+      ],
+      "acceptance_criteria": "Module exports `parseMarkdownToHtml` and returns valid HTML string given standard Markdown input."
+    },
+    {
+      "id": "TASK-03",
+      "title": "PDF Generation Engine Implementation",
+      "description": "Create the async Puppeteer renderer module that accepts an HTML string and generates an A4 PDF buffer.",
+      "target_files": [
+        "src/pdfRenderer.js"
+      ],
+      "dependencies": [
+        "TASK-01"
+      ],
+      "action_items": [
+        "Export an async function `renderHtmlToPdf(htmlString)`.",
+        "Launch Puppeteer in headless mode (`headless: 'new'`).",
+        "Set page content with `page.setContent(htmlString, { waitUntil: 'networkidle0' })`.",
+        "Export PDF buffer using `page.pdf({ format: 'A4', margin: { top: '1in', right: '1in', bottom: '1in', left: '1in' } })`.",
+        "Ensure browser instance is closed safely in a `finally` block."
+      ],
+      "acceptance_criteria": "Function returns a non-empty Buffer object containing valid PDF binary data."
+    },
+    {
+      "id": "TASK-04",
+      "title": "CLI Interface & Main Orchestration",
+      "description": "Wire up Commander CLI options, handle file I/O operations, invoke parser and renderer, and save output file.",
+      "target_files": [
+        "bin/index.js",
+        "src/index.js"
+      ],
+      "dependencies": [
+        "TASK-02",
+        "TASK-03"
+      ],
+      "action_items": [
+        "Create `bin/index.js` with `#!/usr/bin/env node` shebang.",
+        "Configure Commander arguments: `<input-file>` (required), `-o, --output <path>` (optional).",
+        "Implement file existence check in `src/index.js`. Exit with Code 1 if file does not exist.",
+        "Derive default output filename (replace `.md` extension with `.pdf`) if output flag is omitted.",
+        "Read target file, execute `parseMarkdownToHtml`, execute `renderHtmlToPdf`, and write buffer to target output path.",
+        "Catch exceptions, output useful error messages to `stderr`, and exit with appropriate error codes (1, 2, or 3)."
+      ],
+      "acceptance_criteria": "Running `node bin/index.js sample.md -o sample.pdf` generates a valid PDF file on disk."
+    },
+    {
+      "id": "TASK-05",
+      "title": "Integration & Unit Test Suite",
+      "description": "Create unit tests for the parser and integration tests for CLI file generation.",
+      "target_files": [
+        "tests/parser.test.js",
+        "tests/cli.test.js"
+      ],
+      "dependencies": [
+        "TASK-04"
+      ],
+      "action_items": [
+        "Write unit tests in `tests/parser.test.js` verifying Markdown heading, list, and code block conversions.",
+        "Write integration test in `tests/cli.test.js` that executes the CLI against a fixture `.md` file.",
+        "Verify that output `.pdf` file is created, non-empty, and clean up temporary test files post-run."
+      ],
+      "acceptance_criteria": "All test suite assertions pass when running `npm test`."
+    }
+  ]
+}

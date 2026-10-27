@@ -1,0 +1,32 @@
+Agent Roles & Workflows
+
+Architect Agent (Planner)
+
+Task: Takes raw user intent and outputs a structured spec.md and tasks.json.
+
+Prompt Directive: Break this feature down into tiny steps. Define file structures, interfaces, and expected function signatures.
+
+Coder Agent (Developer)
+
+Task: Reads tasks.json one task at a time, writes code files into the directory, and generates unit tests.
+
+Code Reviewer Agent (Quality Control)
+
+Task: Inspects code for edge-case errors, security flaws, or missing dependencies before execution.
+
+QA & Fixer Agent (Execution)
+
+Task: Executes pytest or npm test inside your local Docker sandbox. If tests fail, it captures stdout/stderr and feeds the error back to the Coder Agent for auto-remediation (up to 3 retry loops).
+
+
+---
+
+[ User Prompt ]
+       │
+       ▼
+┌──────────────┐      ┌──────────────┐      ┌──────────────┐      ┌──────────────┐
+│  1. Architect │ ──►  │   2. Coder   │ ──►  │ 3. Reviewer  │ ──►  │ 4. QA Tester │
+└──────────────┘      └──────────────┘      └──────────────┘      └──────────────┘
+                                                    ▲                     │
+                                                    │     (Tests Failed)  │
+                                                    └─────────────────────┘
