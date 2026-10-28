@@ -1,16 +1,26 @@
-const puppeteer = require('puppeteer');
+import puppeteer from 'puppeteer';
 
 /**
  * Renders an HTML string into an A4 PDF buffer using headless Puppeteer.
  *
  * @param {string} htmlString - The HTML content to render.
- * @returns {Promise<Buffer>} Resolves to a Buffer containing valid PDF binary data.
+ * @param {object} [options={}] - Optional Puppeteer PDF rendering options.
+ * @returns {Promise<Buffer>} - Non-empty Buffer containing valid PDF data.
+ * @throws {TypeError} If htmlString is missing or not a string.
  */
-async function renderHtmlToPdf(htmlString) {
-  let browser = null;
+export async function renderHtmlToPdf(htmlString, options = {}) {
+  if (htmlString === undefined || htmlString === null) {
+    throw new TypeError('htmlString is required');
+  }
+
+  if (typeof htmlString !== 'string') {
+    throw new TypeError('htmlString must be a string');
+  }
+
+  let browser;
   try {
     browser = await puppeteer.launch({
-      headless: 'new',
+      headless: true,
       args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
 
@@ -24,10 +34,11 @@ async function renderHtmlToPdf(htmlString) {
         right: '1in',
         bottom: '1in',
         left: '1in'
-      }
+      },
+      ...options
     });
 
-    return Buffer.from(pdfData);
+    return Buffer.isBuffer(pdfData) ? pdfData : Buffer.from(pdfData);
   } finally {
     if (browser) {
       await browser.close();
@@ -35,6 +46,4 @@ async function renderHtmlToPdf(htmlString) {
   }
 }
 
-module.exports = {
-  renderHtmlToPdf
-};
+export default renderHtmlToPdf;
