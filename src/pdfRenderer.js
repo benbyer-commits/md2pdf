@@ -1,39 +1,33 @@
 import puppeteer from 'puppeteer';
 
 /**
- * Renders HTML string to a PDF buffer using Puppeteer.
- * @param {string} html - HTML string to render.
- * @param {object} [options] - PDF rendering options.
- * @returns {Promise<Buffer>} - Generated PDF Buffer.
+ * Renders an HTML string into an A4 PDF Buffer using headless Puppeteer.
+ *
+ * @param {string} htmlString - The compiled HTML content to render.
+ * @returns {Promise<Buffer>} Resolves to a Buffer containing the PDF binary data.
  */
-export async function renderHtmlToPdf(html, options = {}) {
-  let browser;
+export async function renderHtmlToPdf(htmlString) {
+  let browser = null;
   try {
     browser = await puppeteer.launch({
-      headless: true,
+      headless: 'new',
       args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
 
     const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: 'networkidle0' });
+    await page.setContent(htmlString, { waitUntil: 'networkidle0' });
 
-    const pdfBuffer = await page.pdf({
-      format: options.format || 'A4',
-      margin: options.margin || {
-        top: '20mm',
-        right: '20mm',
-        bottom: '20mm',
-        left: '20mm'
-      },
-      printBackground: true,
-      ...options
+    const pdfData = await page.pdf({
+      format: 'A4',
+      margin: {
+        top: '1in',
+        right: '1in',
+        bottom: '1in',
+        left: '1in'
+      }
     });
 
-    return Buffer.from(pdfBuffer);
-  } catch (error) {
-    const renderError = new Error(`PDF Rendering Engine Error: ${error.message}`);
-    renderError.code = 'PDF_RENDER_FAILED';
-    throw renderError;
+    return Buffer.from(pdfData);
   } finally {
     if (browser) {
       await browser.close();
