@@ -17,9 +17,9 @@ TASKS_FILE = os.path.join(DOCS_DIR, "tasks.json")
 SPEC_FILE = os.path.join(DOCS_DIR, "spec.md")
 
 CANDIDATE_MODELS = [
-    "gemini-3.5-flash",
-    "gemini-3.6-flash",
-    "gemini-3.8-flash"
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-1.5-flash"
 ]
 
 CODER_SYSTEM_PROMPT = """
@@ -39,6 +39,75 @@ Do NOT use Markdown code blocks (```) for file boundaries. Use ONLY the === FILE
 Do not include conversational preamble, introductory text, or explanations outside these file blocks.
 """
 
+# --- GIT AUTOMATION HELPERS ---
+
+def run_git(args, check=True):
+    """Executes git commands safely inside the project root."""
+    result = subprocess.run(
+        ["git"] + args,
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True
+    )
+    if check and result.returncode != 0:
+        raise RuntimeError(f"Git command failed ('git {' '.join(args)}'): {result.stderr.strip()}")
+    return result.stdout.strip()
+
+def ensure_git_environment():
+    """Ensures git repository exists and starts from a clean main branch."""
+    if not os.path.exists(os.path.join(PROJECT_ROOT, ".git")):
+        print("⚠️ Git repository not initialized. Running 'git init'...")
+        run_git(["init"])
+        run_git(["branch", "-M", "main"])
+    
+    # Switch to main branch
+    current_branch = run_git(["rev-parse", "--abbrev-ref", "HEAD"], check=False)
+    if current_branch != "main":
+        run_git(["checkout", "main"], check=False)
+
+def create_task_branch(task_id):
+    """Creates and checks out an isolated feature branch for the task."""
+    branch_name = f"factory/{task_id.lower()}"
+    print(f"🌿 Checking out feature branch: {branch_name}")
+    run_git(["checkout", "main"], check=False)
+    run_git(["checkout", "-B", branch_name])
+    return branch_name
+
+def finalize_task_git(task_id, task_title, target_files):
+    """Stages target files, commits, merges into main (--no-ff), and deletes feature branch."""
+    branch_name = f"factory/{task_id.lower()}"
+    print(f"📦 Staging target files for {task_id}...")
+    
+    staged_count = 0
+    for rel_path in target_files:
+        safe_rel_path = rel_path.lstrip("./")
+        full_path = os.path.join(PROJECT_ROOT, safe_rel_path)
+        if os.path.exists(full_path):
+            run_git(["add", safe_rel_path])
+            staged_count += 1
+
+    if staged_count == 0:
+        print(f"⚠️ No target files found to stage for {task_id}.")
+        return
+
+    commit_msg = f"feat({task_id.lower()}): {task_title}\n\nAutomated delivery by Factory Runner."
+    run_git(["commit", "-m", commit_msg])
+
+    print(f"🔀 Merging {branch_name} into main...")
+    run_git(["checkout", "main"])
+    run_git(["merge", "--no-ff", branch_name, "-m", f"Merge branch '{branch_name}' into main"])
+    run_git(["branch", "-D", branch_name])
+    print(f"  └── ✅ Branch {branch_name} merged and deleted.")
+
+def abort_task_git(task_id):
+    """Discards feature branch on failure and reverts working tree to main."""
+    branch_name = f"factory/{task_id.lower()}"
+    print(f"🚨 Aborting task {task_id}. Rolling back git working tree to main...")
+    run_git(["checkout", "main"], check=False)
+    run_git(["branch", "-D", branch_name], check=False)
+
+# --- FILE & UTILITY HELPERS ---
+
 def load_file(path):
     if not os.path.exists(path):
         print(f"[Error] Required spec file not found: {path}")
@@ -47,6 +116,7 @@ def load_file(path):
         return f.read()
 
 def is_task_completed(task):
+    """Returns True if all target_files exist on main and are non-empty."""
     target_files = task.get("target_files", [])
     if not target_files:
         return False
@@ -71,6 +141,8 @@ def extract_file_blocks(llm_response_text):
             continue
         files[clean_path] = content.strip()
     return files
+
+# --- AI GENERATION & RETRY ENGINE ---
 
 def generate_code_with_fallback(prompt):
     config = types.GenerateContentConfig(
@@ -99,7 +171,7 @@ def generate_code_with_fallback(prompt):
                 if extracted_files:
                     return extracted_files
                 else:
-                    print(f"⚠️ [Parse Warning] Model '{model_name}' produced no extractable file blocks. Retrying with next model...")
+                    print(f"⚠️ [Parse Warning] Model '{model_name}' produced no extractable file blocks. Retrying with next candidate...")
                     break
 
             except errors.APIError as e:
@@ -134,47 +206,11 @@ def generate_code_with_fallback(prompt):
     print(f"\n🛑 [Pipeline Failure] All models failed to produce valid outputs.")
     sys.exit(1)
 
-def run_task(task, spec_content):
-    task_id = task.get("id")
-    title = task.get("title")
-    print(f"\n==========================================")
-    print(f"🚀 Executing {task_id}: {title}")
-    print(f"==========================================")
-
-    user_prompt = f"""
-PROJECT SPECIFICATION:
-{spec_content}
-
-CURRENT TASK:
-ID: {task_id}
-Title: {title}
-Description: {task.get('description')}
-Target Files: {', '.join(task.get('target_files', []))}
-Action Items:
-{json.dumps(task.get('action_items', []), indent=2)}
-
-Acceptance Criteria:
-{task.get('acceptance_criteria')}
-
-Please generate the code for the target files required for this task.
-"""
-
-    extracted_files = generate_code_with_fallback(user_prompt)
-
-    for rel_path, content in extracted_files.items():
-        safe_rel_path = rel_path.lstrip("./")
-        full_path = os.path.join(PROJECT_ROOT, safe_rel_path)
-        os.makedirs(os.path.dirname(full_path), exist_ok=True)
-        
-        with open(full_path, "w", encoding="utf-8") as f:
-            f.write(content + "\n")
-        print(f"  └── 📄 Written: {safe_rel_path}")
-
-    return True
+# --- TEST EXECUTION & SELF-HEALING ---
 
 def execute_npm_tests():
     """Executes 'npm test' via subprocess and captures stdout/stderr."""
-    print("\n🧪 Running automated test suite ('npm test')...")
+    print("🧪 Running automated test suite ('npm test')...")
     try:
         result = subprocess.run(
             ["npm", "test"],
@@ -184,21 +220,21 @@ def execute_npm_tests():
             timeout=120
         )
         if result.returncode == 0:
-            print("✅ All unit & integration tests passed successfully!")
+            print("  └── ✅ All tests passed successfully!")
             return True, result.stdout
         else:
-            print("❌ Test suite failed!")
+            print("  └── ❌ Test suite failed!")
             error_log = (result.stdout or "") + "\n" + (result.stderr or "")
             return False, error_log.strip()
     except Exception as e:
         return False, f"Subprocess error while running npm test: {str(e)}"
 
 def run_auto_fix_loop(spec_content, initial_error_log, max_fix_attempts=3):
-    """Feeds test failure logs back to the LLM for automated remediation."""
+    """Feeds test failure logs back to the LLM for automated remediation on the feature branch."""
     current_error = initial_error_log
 
     for attempt in range(1, max_fix_attempts + 1):
-        print(f"\n🛠️ [Auto-Fix Loop {attempt}/{max_fix_attempts}] Sending error logs to QA/Coder Agent...")
+        print(f"\n🛠️ [Auto-Fix Loop {attempt}/{max_fix_attempts}] Sending error logs to Coder Agent...")
         
         fix_prompt = f"""
 PROJECT SPECIFICATION:
@@ -221,18 +257,79 @@ The current codebase failed the automated test suite. Analyze the error trace ab
 
         passed, output = execute_npm_tests()
         if passed:
-            print(f"\n🎉 Auto-remediation successful on attempt {attempt}!")
+            print(f"🎉 Auto-remediation successful on attempt {attempt}!")
             return True
         
         current_error = output
 
-    print(f"\n🛑 Auto-fix loop reached maximum attempts ({max_fix_attempts}) without passing tests.")
+    print(f"🛑 Auto-fix loop reached maximum attempts ({max_fix_attempts}) without passing tests.")
     return False
+
+# --- TASK ORCHESTRATION ---
+
+def run_task(task, spec_content):
+    task_id = task.get("id")
+    title = task.get("title")
+    target_files = task.get("target_files", [])
+
+    print(f"\n==========================================")
+    print(f"🚀 Executing {task_id}: {title}")
+    print(f"==========================================")
+
+    # 1. Checkout Feature Branch
+    create_task_branch(task_id)
+
+    # 2. Prompt Coder Agent & Generate Code
+    user_prompt = f"""
+PROJECT SPECIFICATION:
+{spec_content}
+
+CURRENT TASK:
+ID: {task_id}
+Title: {title}
+Description: {task.get('description')}
+Target Files: {', '.join(target_files)}
+Action Items:
+{json.dumps(task.get('action_items', []), indent=2)}
+
+Acceptance Criteria:
+{task.get('acceptance_criteria')}
+
+Please generate the code for the target files required for this task.
+"""
+
+    extracted_files = generate_code_with_fallback(user_prompt)
+
+    # 3. Write Files to Feature Branch
+    for rel_path, content in extracted_files.items():
+        safe_rel_path = rel_path.lstrip("./")
+        full_path = os.path.join(PROJECT_ROOT, safe_rel_path)
+        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        
+        with open(full_path, "w", encoding="utf-8") as f:
+            f.write(content + "\n")
+        print(f"  └── 📄 Written: {safe_rel_path}")
+
+    # 4. Run Tests & Self-Healing Loop on Feature Branch
+    if os.path.exists(os.path.join(PROJECT_ROOT, "package.json")):
+        passed, log = execute_npm_tests()
+        if not passed:
+            print("⚠️ Initial tests failed on feature branch. Starting auto-fix loop...")
+            passed = run_auto_fix_loop(spec_content, log)
+            if not passed:
+                abort_task_git(task_id)
+                return False
+
+    # 5. Finalize Git Commit & Merge to Main
+    finalize_task_git(task_id, title, target_files)
+    return True
 
 def main():
     if "GEMINI_API_KEY" not in os.environ:
         print("[Error] GEMINI_API_KEY environment variable is not set.")
         sys.exit(1)
+
+    ensure_git_environment()
 
     spec_content = load_file(SPEC_FILE)
     tasks_data = json.loads(load_file(TASKS_FILE))
@@ -245,24 +342,15 @@ def main():
         title = task.get("title")
         
         if is_task_completed(task):
-            print(f"⏩ Skipping {task_id} ({title}): Target files already exist.")
+            print(f"⏩ Skipping {task_id} ({title}): Target files already present on main.")
             continue
 
         success = run_task(task, spec_content)
         if not success:
-            print(f"❌ Aborting pipeline on failure at {task_id}.")
+            print(f"❌ Aborting pipeline execution due to failure at {task_id}.")
             sys.exit(1)
 
-    # --- AUTOMATED QA & AUTO-FIX STAGE ---
-    tests_passed, test_log = execute_npm_tests()
-    if not tests_passed:
-        print("\n⚠️ Test failures detected. Initiating automated QA feedback loop...")
-        tests_passed = run_auto_fix_loop(spec_content, test_log, max_fix_attempts=3)
-
-    if tests_passed:
-        print("\n✅ Factory pipeline execution & verification complete!")
-    else:
-        print("\n❌ Factory pipeline completed generation, but tests require manual inspection.")
+    print("\n✅ Factory pipeline execution, verification, and git merges complete!")
 
 if __name__ == "__main__":
     main()
