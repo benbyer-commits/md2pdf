@@ -1,18 +1,14 @@
 import { marked } from 'marked';
+import fs from 'fs/promises';
 
-/**
- * Compiles a Markdown string into HTML using marked.
- *
- * @param {string} markdownString - Markdown text input.
- * @returns {Promise<string>} Compiled HTML output string.
- */
-export async function compileMarkdownToHtml(markdownString) {
-  if (typeof markdownString !== 'string') {
-    throw new TypeError('Expected markdownString to be a string');
+export async function parseMarkdown(content) {
+  if (typeof content !== 'string') {
+    throw new TypeError('Markdown content must be a string');
   }
+  return await marked.parse(content, { gfm: true });
+}
 
-  return marked.parse(markdownString, {
-    gfm: true,
-    breaks: true
-  });
+export async function parseMarkdownFile(filePath) {
+  const content = await fs.readFile(filePath, 'utf-8');
+  return await parseMarkdown(content);
 }

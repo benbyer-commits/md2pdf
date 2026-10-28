@@ -1,73 +1,43 @@
-import fs from 'node:fs/promises';
-import path from 'node:path';
-import { compileMarkdownToHtml } from './parser.js';
+import path from 'path';
+import fs from 'fs/promises';
+import { parseMarkdownFile } from './parser.js';
 import { renderHtmlToPdf } from './pdfRenderer.js';
 
-/**
- * Main orchestrator: reads a markdown file, compiles it to HTML, renders a PDF, and writes to disk.
- *
- * @param {string} inputPath - Relative or absolute path to target Markdown file.
- * @param {string} [outputPath] - Destination path for generated PDF.
- * @returns {Promise<string>} Resolved output file path.
- */
+export function getDefaultOutputPath(inputPath) {
+  const dir = path.dirname(inputPath);
+  const ext = path.extname(inputPath);
+  const baseName = path.basename(inputPath, ext);
+  return path.join(dir, `${baseName}.pdf`);
+}
+
 export async function convertMarkdownToPdf(inputPath, outputPath) {
-  let absoluteInputPath;
-  try {
-    absoluteInputPath = path.resolve(process.cwd(), inputPath);
-    await fs.access(absoluteInputPath);
-  } catch (err) {
-    const error = new Error(`Input file not found or unreadable: ${inputPath}`);
-    error.code = 'ENOENT';
-    throw error;
-  }
+  const targetOutputPath = outputPath || getDefaultOutputPath(inputPath);
 
-  let finalOutputPath = outputPath;
-  if (!finalOutputPath) {
-    if (absoluteInputPath.toLowerCase().endsWith('.md')) {
-      finalOutputPath = absoluteInputPath.slice(0, -3) + '.pdf';
-    } else {
-      finalOutputPath = absoluteInputPath + '.pdf';
-    }
-  } else {
-    finalOutputPath = path.resolve(process.cwd(), finalOutputPath);
-  }
-
-  let markdownContent;
+  let html;
   try {
-    markdownContent = await fs.readFile(absoluteInputPath, 'utf-8');
+    html = await parseMarkdownFile(inputPath);
   } catch (err) {
-    const error = new Error(`Failed to read input file: ${err.message}`);
-    error.code = 'READ_ERROR';
-    throw error;
-  }
-
-  let htmlContent;
-  try {
-    htmlContent = await compileMarkdownToHtml(markdownContent);
-  } catch (err) {
-    const error = new Error(`Failed to parse markdown: ${err.message}`);
-    error.code = 'PARSE_ERROR';
+    const error = new Error(`Input file not found or unreadable: ${err.message}`);
+    error.code = 'ENOENT_OR_READ_ERROR';
     throw error;
   }
 
   let pdfBuffer;
   try {
-    pdfBuffer = await renderHtmlToPdf(htmlContent);
+    pdfBuffer = await renderHtmlToPdf(html);
   } catch (err) {
-    const error = new Error(`Failed to render PDF: ${err.message}`);
-    error.code = 'PDF_ERROR';
+    const error = new Error(`PDF rendering engine failure: ${err.message}`);
+    error.code = 'PDF_RENDER_ERROR';
     throw error;
   }
 
   try {
-    const outputDir = path.dirname(finalOutputPath);
-    await fs.mkdir(outputDir, { recursive: true });
-    await fs.writeFile(finalOutputPath, pdfBuffer);
+    await fs.writeFile(targetOutputPath, pdfBuffer);
   } catch (err) {
-    const error = new Error(`Failed to write output PDF file: ${err.message}`);
+    const error = new Error(`Failed to write output PDF: ${err.message}`);
     error.code = 'WRITE_ERROR';
     throw error;
   }
 
-  return finalOutputPath;
+  return targetOutputPath;
 }

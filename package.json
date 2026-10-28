@@ -1,25 +1,18 @@
 {
   "name": "md2pdf",
   "version": "1.0.0",
-  "description": "A lightweight CLI tool to convert Markdown files to PDF documents using Node.js, Marked, and Puppeteer.",
+  "description": "Lightweight Markdown to PDF CLI utility",
   "type": "module",
   "main": "src/index.js",
   "bin": {
     "md2pdf": "./bin/index.js"
   },
   "scripts": {
-    "start": "node bin/index.js",
-    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand"
+    "test": "jest"
   },
   "dependencies": {
     "commander": "^12.0.0",
     "marked": "^12.0.0",
     "puppeteer": "^22.0.0"
-  },
-  "devDependencies": {
-    "jest": "^29.7.0"
-  },
-  "engines": {
-    "node": ">=20.0.0"
   }
 }
