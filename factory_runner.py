@@ -17,9 +17,9 @@ TASKS_FILE = os.path.join(DOCS_DIR, "tasks.json")
 SPEC_FILE = os.path.join(DOCS_DIR, "spec.md")
 
 CANDIDATE_MODELS = [
-    "gemini-2.5-flash",
-    "gemini-2.5-pro",
-    "gemini-1.5-flash"
+    "gemini-3.5-flash",
+    "gemini-3.6-flash",
+    "gemini-3.8-flash"
 ]
 
 CODER_SYSTEM_PROMPT = """
