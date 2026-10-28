@@ -1,84 +1,73 @@
-import fs from 'fs/promises';
-import path from 'path';
-import { parseMarkdownToHtml } from './parser.js';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { compileMarkdownToHtml } from './parser.js';
 import { renderHtmlToPdf } from './pdfRenderer.js';
 
-export class CLIError extends Error {
-  /**
-   * Custom CLI Error with specified exit code.
-   * @param {string} message 
-   * @param {number} exitCode 
-   */
-  constructor(message, exitCode = 1) {
-    super(message);
-    this.name = 'CLIError';
-    this.exitCode = exitCode;
-  }
-}
-
 /**
- * Derives the output PDF file path based on input path and output flag options.
- * @param {string} inputFile 
- * @param {string} [outputOption] 
- * @returns {string} Resolved output path
+ * Main orchestrator: reads a markdown file, compiles it to HTML, renders a PDF, and writes to disk.
+ *
+ * @param {string} inputPath - Relative or absolute path to target Markdown file.
+ * @param {string} [outputPath] - Destination path for generated PDF.
+ * @returns {Promise<string>} Resolved output file path.
  */
-export function deriveOutputPath(inputFile, outputOption) {
-  if (outputOption) {
-    return path.resolve(outputOption);
-  }
-  const parsedPath = path.parse(inputFile);
-  const newName = parsedPath.name + '.pdf';
-  return path.resolve(parsedPath.dir, newName);
-}
-
-/**
- * Main orchestrator: reads target Markdown file, parses to HTML, renders to PDF, and writes to output path.
- * @param {string} inputFile 
- * @param {Object} options 
- * @param {string} [options.output] 
- * @returns {Promise<string>} Final output file path
- */
-export async function convertMarkdownToPdf(inputFile, options = {}) {
-  const resolvedInputPath = path.resolve(inputFile);
-
-  // 1. Validate target file existence & readability (Exit Code 1)
+export async function convertMarkdownToPdf(inputPath, outputPath) {
+  let absoluteInputPath;
   try {
-    await fs.access(resolvedInputPath, fs.constants.R_OK);
+    absoluteInputPath = path.resolve(process.cwd(), inputPath);
+    await fs.access(absoluteInputPath);
   } catch (err) {
-    throw new CLIError(`Input file not found or unreadable: "${inputFile}"`, 1);
+    const error = new Error(`Input file not found or unreadable: ${inputPath}`);
+    error.code = 'ENOENT';
+    throw error;
   }
 
-  // 2. Read target Markdown file (utf-8)
+  let finalOutputPath = outputPath;
+  if (!finalOutputPath) {
+    if (absoluteInputPath.toLowerCase().endsWith('.md')) {
+      finalOutputPath = absoluteInputPath.slice(0, -3) + '.pdf';
+    } else {
+      finalOutputPath = absoluteInputPath + '.pdf';
+    }
+  } else {
+    finalOutputPath = path.resolve(process.cwd(), finalOutputPath);
+  }
+
   let markdownContent;
   try {
-    markdownContent = await fs.readFile(resolvedInputPath, 'utf-8');
+    markdownContent = await fs.readFile(absoluteInputPath, 'utf-8');
   } catch (err) {
-    throw new CLIError(`Failed to read input file "${inputFile}": ${err.message}`, 1);
+    const error = new Error(`Failed to read input file: ${err.message}`);
+    error.code = 'READ_ERROR';
+    throw error;
   }
 
-  // 3. Compile Markdown to HTML
   let htmlContent;
   try {
-    htmlContent = await parseMarkdownToHtml(markdownContent);
+    htmlContent = await compileMarkdownToHtml(markdownContent);
   } catch (err) {
-    throw new CLIError(`Failed to parse Markdown content: ${err.message}`, 3);
+    const error = new Error(`Failed to parse markdown: ${err.message}`);
+    error.code = 'PARSE_ERROR';
+    throw error;
   }
 
-  // 4. Render HTML to PDF via Puppeteer
   let pdfBuffer;
   try {
     pdfBuffer = await renderHtmlToPdf(htmlContent);
   } catch (err) {
-    throw new CLIError(`PDF rendering engine failure: ${err.message}`, 3);
+    const error = new Error(`Failed to render PDF: ${err.message}`);
+    error.code = 'PDF_ERROR';
+    throw error;
   }
 
-  // 5. Write PDF Buffer to output file path
-  const outputPath = deriveOutputPath(inputFile, options.output);
   try {
-    await fs.writeFile(outputPath, pdfBuffer);
+    const outputDir = path.dirname(finalOutputPath);
+    await fs.mkdir(outputDir, { recursive: true });
+    await fs.writeFile(finalOutputPath, pdfBuffer);
   } catch (err) {
-    throw new CLIError(`Failed to write PDF file to "${outputPath}": ${err.message}`, 1);
+    const error = new Error(`Failed to write output PDF file: ${err.message}`);
+    error.code = 'WRITE_ERROR';
+    throw error;
   }
 
-  return outputPath;
+  return finalOutputPath;
 }

@@ -1,14 +1,18 @@
 import { marked } from 'marked';
 
 /**
- * Converts Markdown string into standard HTML string with GFM enabled.
- * @param {string} markdownContent 
- * @returns {Promise<string>} Compiled HTML content
+ * Compiles a Markdown string into HTML using marked.
+ *
+ * @param {string} markdownString - Markdown text input.
+ * @returns {Promise<string>} Compiled HTML output string.
  */
-export async function parseMarkdownToHtml(markdownContent) {
-  marked.setOptions({
+export async function compileMarkdownToHtml(markdownString) {
+  if (typeof markdownString !== 'string') {
+    throw new TypeError('Expected markdownString to be a string');
+  }
+
+  return marked.parse(markdownString, {
     gfm: true,
     breaks: true
   });
-  return await marked.parse(markdownContent);
 }

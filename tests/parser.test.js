@@ -1,10 +1,14 @@
-import { parseMarkdownToHtml } from '../src/parser.js';
+import { compileMarkdownToHtml } from '../src/parser.js';
 
-describe('parseMarkdownToHtml', () => {
-  it('should compile valid Markdown content into HTML string', async () => {
-    const markdown = '# Sample Title\n\nThis is a **bold** statement.';
-    const html = await parseMarkdownToHtml(markdown);
-    expect(html).toContain('<h1>Sample Title</h1>');
+describe('parser.js - compileMarkdownToHtml', () => {
+  test('converts basic markdown to HTML', async () => {
+    const md = '# Hello World\n\nThis is **bold** text.';
+    const html = await compileMarkdownToHtml(md);
+    expect(html).toContain('<h1>Hello World</h1>');
     expect(html).toContain('<strong>bold</strong>');
+  });
+
+  test('throws TypeError if input is not a string', async () => {
+    await expect(compileMarkdownToHtml(123)).rejects.toThrow(TypeError);
   });
 });

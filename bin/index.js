@@ -1,59 +1,60 @@
 #!/usr/bin/env node
 
-import { Command, CommanderError } from 'commander';
-import { readFileSync } from 'fs';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
-import { convertMarkdownToPdf, CLIError } from '../src/index.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-let version = '1.0.0';
-try {
-  const pkgPath = join(__dirname, '..', 'package.json');
-  const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
-  version = pkg.version || '1.0.0';
-} catch (e) {
-  // Fallback to default version if package.json cannot be read
-}
+import { Command } from 'commander';
+import fs from 'node:fs';
+import path from 'node:path';
+import { convertMarkdownToPdf } from '../src/index.js';
 
 const program = new Command();
 
 program
   .name('md2pdf')
-  .description('A lightweight CLI utility to compile Markdown files to PDF documents.')
-  .version(version, '-v, --version', 'Display current CLI version')
+  .description('Convert Markdown files to PDF')
+  .version('1.0.0', '-v, --version', 'Display current CLI version')
+  .helpOption('-h, --help', 'Display usage instructions and available options')
   .argument('<input-file>', 'Path to target Markdown file')
   .option('-o, --output <path>', 'Destination path for the generated PDF')
-  .exitOverride();
-
-async function run() {
-  try {
-    program.parse(process.argv);
-
-    const [inputFile] = program.args;
-    const options = program.opts();
-
-    const outputPath = await convertMarkdownToPdf(inputFile, options);
-    console.log(`Successfully generated PDF: ${outputPath}`);
-    process.exit(0);
-  } catch (err) {
-    if (err instanceof CommanderError) {
-      if (err.exitCode === 0) {
-        // Successful help or version exit
-        process.exit(0);
+  .action(async (inputFile, options) => {
+    try {
+      const resolvedInput = path.resolve(process.cwd(), inputFile);
+      if (!fs.existsSync(resolvedInput)) {
+        console.error(`Error: File not found: ${inputFile}`);
+        process.exit(1);
       }
-      // Invalid CLI Arguments error (Code 2)
-      process.exit(2);
-    } else if (err instanceof CLIError) {
-      console.error(`Error: ${err.message}`);
-      process.exit(err.exitCode);
-    } else {
-      console.error(`Unexpected Error: ${err.message || err}`);
-      process.exit(3);
+
+      await convertMarkdownToPdf(inputFile, options.output);
+      process.exit(0);
+    } catch (err) {
+      if (err.code === 'ENOENT' || err.code === 'READ_ERROR') {
+        console.error(`Error: ${err.message}`);
+        process.exit(1);
+      } else if (err.code === 'PDF_ERROR') {
+        console.error(`Error: ${err.message}`);
+        process.exit(3);
+      } else {
+        console.error(`Error: ${err.message}`);
+        process.exit(1);
+      }
     }
+  });
+
+program.exitOverride((err) => {
+  if (
+    err.code === 'commander.missingArgument' ||
+    err.code === 'commander.unknownOption' ||
+    err.code === 'commander.optionMissingArgument'
+  ) {
+    process.exit(2);
+  }
+  throw err;
+});
+
+try {
+  program.parse(process.argv);
+} catch (err) {
+  if (err.exitCode !== undefined) {
+    process.exit(err.exitCode);
+  } else {
+    process.exit(2);
   }
 }
-
-run();

@@ -1,25 +1,13 @@
-# md2pdf
+# Markdown-to-PDF CLI (`md2pdf`)
 
-A lightweight Command-Line Interface (CLI) tool written in Node.js to compile Markdown files (`.md`) into PDF documents (`.pdf`).
+A lightweight Node.js CLI tool that converts Markdown files (`.md`) into HTML and renders clean A4 PDF documents using Puppeteer.
 
 ## Usage
 
 ```bash
-# Convert sample.md to sample.pdf in the same directory
-node bin/index.js sample.md
+# Convert doc.md into doc.pdf in the same directory
+md2pdf doc.md
 
-# Specify custom output path
-node bin/index.js sample.md -o /path/to/output.pdf
-
-# Show version
-node bin/index.js -v
-
-# Show help options
-node bin/index.js -h
+# Convert doc.md into custom output path
+md2pdf doc.md -o custom-output.pdf
 ```
-
-## Exit Codes
-* **0**: Success
-* **1**: Input file not found or unreadable / output write failure
-* **2**: Invalid CLI arguments
-* **3**: PDF rendering engine failure
