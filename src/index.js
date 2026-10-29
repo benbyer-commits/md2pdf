@@ -1,7 +1,7 @@
-const fs = require('fs');
-const path = require('path');
-const { parseMarkdownFile } = require('./parser');
-const { renderPdfFromHtml } = require('./pdfRenderer');
+import fs from 'fs';
+import path from 'path';
+import { parseMarkdownFile } from './parser.js';
+import { renderPdfFromHtml } from './pdfRenderer.js';
 
 /**
  * Converts a Markdown file to a PDF file.
@@ -14,7 +14,7 @@ const { renderPdfFromHtml } = require('./pdfRenderer');
  *   1 – Input file not found or unreadable.
  *   3 – PDF rendering failure.
  */
-async function convertMarkdownToPdf(inputPath, outputPath) {
+export async function convertMarkdownToPdf(inputPath, outputPath) {
   // Validate input file existence
   if (!fs.existsSync(inputPath) || !fs.statSync(inputPath).isFile()) {
     const err = new Error('Input file not found');
@@ -35,15 +35,19 @@ async function convertMarkdownToPdf(inputPath, outputPath) {
     throw err;
   }
 
-  // Determine output path
+  // Determine final output path
   const finalOutputPath = outputPath
     ? outputPath
     : inputPath.replace(/\.md$/i, '.pdf');
+
+  // Ensure directory exists
+  const dir = path.dirname(finalOutputPath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
 
   // Write PDF buffer to disk
   fs.writeFileSync(finalOutputPath, pdfBuffer);
 
   return finalOutputPath;
 }
-
-module.exports = { convertMarkdownToPdf };

@@ -1,7 +1,7 @@
 {
   "date": "2026-10-29",
-  "requests": 38,
-  "prompt_tokens": 67040,
-  "candidate_tokens": 69458,
-  "total_tokens": 136498
+  "requests": 65,
+  "prompt_tokens": 130847,
+  "candidate_tokens": 129043,
+  "total_tokens": 259890
 }

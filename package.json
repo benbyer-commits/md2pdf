@@ -1,22 +1,16 @@
 {
   "name": "md2pdf",
   "version": "1.0.0",
-  "description": "A lightweight CLI to convert Markdown files to PDF",
-  "main": "src/index.js",
+  "type": "module",
   "bin": {
     "md2pdf": "./bin/index.js"
   },
   "scripts": {
     "test": "jest"
   },
-  "author": "",
-  "license": "MIT",
   "dependencies": {
-    "commander": "^12.0.0",
+    "commander": "^11.1.0",
     "marked": "^12.0.0",
-    "puppeteer": "^22.0.0"
-  },
-  "devDependencies": {
-    "jest": "^29.0.0"
+    "puppeteer": "^22.8.0"
   }
 }
