@@ -1,14 +1,37 @@
-import { marked } from 'marked';
-import fs from 'fs/promises';
+/**
+ * Markdown Parser Module
+ *
+ * This module provides functions to convert Markdown strings and Markdown
+ * files into HTML strings using the `marked` library.
+ */
+const fs = require('fs');
+const { marked } = require('marked');
 
-export async function parseMarkdown(content) {
-  if (typeof content !== 'string') {
-    throw new TypeError('Markdown content must be a string');
+function parseMarkdown(markdownString) {
+  if (typeof markdownString !== 'string') {
+    throw new TypeError('Input must be a string');
   }
-  return await marked.parse(content, { gfm: true });
+
+  if (!markdownString) {
+    return '';
+  }
+
+  // Normalize literal \n string escapes to real newline characters
+  const normalizedInput = markdownString.replace(/\\n/g, '\n');
+
+  return marked.parse(normalizedInput);
 }
 
-export async function parseMarkdownFile(filePath) {
-  const content = await fs.readFile(filePath, 'utf-8');
-  return await parseMarkdown(content);
+function parseMarkdownFile(filePath) {
+  if (typeof filePath !== 'string') {
+    throw new TypeError('File path must be a string');
+  }
+
+  const fileContent = fs.readFileSync(filePath, 'utf-8');
+  return parseMarkdown(fileContent);
 }
+
+module.exports = {
+  parseMarkdown,
+  parseMarkdownFile
+};

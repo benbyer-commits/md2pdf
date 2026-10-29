@@ -1,49 +1,22 @@
-import puppeteer from 'puppeteer';
+const puppeteer = require('puppeteer');
 
 /**
- * Renders an HTML string into an A4 PDF buffer using headless Puppeteer.
+ * Renders HTML content to a PDF buffer using Puppeteer.
  *
- * @param {string} htmlString - The HTML content to render.
- * @param {object} [options={}] - Optional Puppeteer PDF rendering options.
- * @returns {Promise<Buffer>} - Non-empty Buffer containing valid PDF data.
- * @throws {TypeError} If htmlString is missing or not a string.
+ * @param {string} html - The HTML string to render.
+ * @returns {Promise<Buffer>} - PDF data as a Buffer.
+ * @throws {Error} - If Puppeteer fails to render the PDF.
  */
-export async function renderHtmlToPdf(htmlString, options = {}) {
-  if (htmlString === undefined || htmlString === null) {
-    throw new TypeError('htmlString is required');
-  }
-
-  if (typeof htmlString !== 'string') {
-    throw new TypeError('htmlString must be a string');
-  }
-
-  let browser;
+async function renderPdfFromHtml(html) {
+  const browser = await puppeteer.launch();
   try {
-    browser = await puppeteer.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
-    });
-
     const page = await browser.newPage();
-    await page.setContent(htmlString, { waitUntil: 'networkidle0' });
-
-    const pdfData = await page.pdf({
-      format: 'A4',
-      margin: {
-        top: '1in',
-        right: '1in',
-        bottom: '1in',
-        left: '1in'
-      },
-      ...options
-    });
-
-    return Buffer.isBuffer(pdfData) ? pdfData : Buffer.from(pdfData);
+    await page.setContent(html, { waitUntil: 'networkidle0' });
+    const pdfBuffer = await page.pdf({ format: 'A4' });
+    return pdfBuffer;
   } finally {
-    if (browser) {
-      await browser.close();
-    }
+    await browser.close();
   }
 }
 
-export default renderHtmlToPdf;
+module.exports = { renderPdfFromHtml };

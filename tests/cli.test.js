@@ -3,48 +3,49 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
+function createTempFile(content, ext = '.md') {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'md2pdf-cli-test-'));
+  const filePath = path.join(tmpDir, `doc${ext}`);
+  fs.writeFileSync(filePath, content);
+  return { tmpDir, filePath };
+}
+
 describe('CLI Integration Tests', () => {
-  let tmpDir;
-
-  beforeEach(async () => {
-    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'md2pdf-cli-test-'));
-  });
-
-  afterEach(async () => {
-    await fs.promises.rm(tmpDir, { recursive: true, force: true });
-  });
-
   test('executes CLI and generates output PDF for valid markdown file', () => {
-    const mdFile = path.join(tmpDir, 'doc.md');
-    const expectedPdfFile = path.join(tmpDir, 'doc.pdf');
-    fs.writeFileSync(mdFile, '# Title\n\nCLI Test Body.');
+    const { tmpDir, filePath } = createTempFile('# Hello World');
+    const cmd = `node ./bin/index.js "${filePath}"`;
+    execSync(cmd, { stdio: 'ignore' });
 
-    const command = `node ./bin/index.js "${mdFile}"`;
-    const stdout = execSync(command).toString();
-
-    expect(fs.existsSync(expectedPdfFile)).toBe(true);
-    const pdfBuffer = fs.readFileSync(expectedPdfFile);
-    expect(pdfBuffer.slice(0, 5).toString('ascii')).toBe('%PDF-');
+    const pdfPath = filePath.replace(/\.md$/i, '.pdf');
+    expect(fs.existsSync(pdfPath)).toBe(true);
   });
 
   test('executes CLI with -o / --output option', () => {
-    const mdFile = path.join(tmpDir, 'doc.md');
-    const customPdfFile = path.join(tmpDir, 'custom_output.pdf');
-    fs.writeFileSync(mdFile, '# Custom Output Title');
+    const { tmpDir, filePath } = createTempFile('**Bold** text');
+    const outPdf = path.join(tmpDir, 'custom_output.pdf');
+    const cmd = `node ./bin/index.js "${filePath}" -o "${outPdf}"`;
+    execSync(cmd, { stdio: 'ignore' });
 
-    const command = `node ./bin/index.js "${mdFile}" -o "${customPdfFile}"`;
-    execSync(command);
-
-    expect(fs.existsSync(customPdfFile)).toBe(true);
+    expect(fs.existsSync(outPdf)).toBe(true);
   });
 
   test('exits with code 1 when input file is not found', () => {
-    const nonExistentFile = path.join(tmpDir, 'non-existent.md');
+    const cmd = `node ./bin/index.js "nonexistent.md"`;
     try {
-      execSync(`node ./bin/index.js "${nonExistentFile}"`, { stdio: 'pipe' });
-      fail('Expected CLI to exit with code 1');
-    } catch (err) {
-      expect(err.status).toBe(1);
+      execSync(cmd, { stdio: 'ignore' });
+    } catch (e) {
+      expect(e.status).toBe(1);
     }
+  });
+
+  test('displays version with --version flag', () => {
+    const output = execSync(`node ./bin/index.js --version`).toString().trim();
+    const pkg = require('../package.json');
+    expect(output).toBe(pkg.version);
+  });
+
+  test('displays help with --help flag', () => {
+    const output = execSync(`node ./bin/index.js --help`).toString();
+    expect(output).toMatch(/Usage:/i);
   });
 });

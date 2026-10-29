@@ -5,7 +5,7 @@ import re
 import subprocess
 import sys
 import time
-from openai import OpenAI, APIError, RateLimitError, InternalServerError
+from openai import OpenAI, APIError, APIConnectionError, RateLimitError, InternalServerError
 
 # Initialize Groq Client via OpenAI-compatible endpoint
 API_KEY = os.environ.get("GROQ_API_KEY")
@@ -16,7 +16,8 @@ if not API_KEY:
 
 client = OpenAI(
     api_key=API_KEY,
-    base_url="https://api.groq.com/openai/v1"
+    base_url="https://api.groq.com/openai/v1",
+    timeout=60.0
 )
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -48,7 +49,8 @@ PACKAGE & TESTING REQUIREMENTS:
 - Integration tests targeting the CLI MUST invoke the local binary via node ('node ./bin/index.js <args>'), NOT the global 'md2pdf' command.
 
 CRITICAL OUTPUT FORMATTING INSTRUCTIONS:
-For EVERY file you create or update, wrap complete file content inside explicit FILE tags:
+For EVERY file you create or update, wrap complete file content inside explicit FILE tags.
+Do NOT use bold tags like **FILE: path** or markdown headers. Use exact triple equals format:
 
 === FILE: package.json ===
 {
@@ -271,15 +273,24 @@ def is_task_completed(task):
 def extract_file_blocks(llm_response_text):
     if not llm_response_text:
         return {}
-    pattern = r"===\s*FILE:\s*([^\n=]+)\s*===\n(.*?)===\s*END FILE\s*==="
-    matches = re.findall(pattern, llm_response_text, re.DOTALL)
-    
+
     files = {}
+
+    pattern = r"(?:===+|\*\*|###|\#)?\s*FILE:\s*([^\n\*=`]+?)\s*(?:===+|\*\*|\#)?\s*\n(.*?)(?=(?:(?:===+|\*\*|###|\#)?\s*FILE:)|$)"
+    matches = re.findall(pattern, llm_response_text, re.DOTALL | re.IGNORECASE)
+
     for filepath, content in matches:
-        clean_path = filepath.strip()
-        if any(char in clean_path for char in ['"', "'", '{', '}', ',']):
+        clean_path = filepath.strip().strip("`").strip("'").strip('"')
+        if any(char in clean_path for char in ['{', '}', ',']):
             continue
-        files[clean_path] = content.strip()
+
+        clean_content = content.strip()
+        clean_content = re.sub(r"^```[a-zA-Z0-9_-]*\n?", "", clean_content)
+        clean_content = re.sub(r"\n?```$", "", clean_content)
+        clean_content = re.sub(r"\n?(?:===+|\*\*|###|\#)?\s*END FILE\s*(?:===+|\*\*|\#)?$", "", clean_content, flags=re.IGNORECASE)
+
+        files[clean_path] = clean_content.strip()
+
     return files
 
 # --- AGENT CALLS ---
@@ -302,6 +313,7 @@ def generate_code_with_fallback(prompt, usage_tracker):
                         {"role": "user", "content": prompt}
                     ],
                     temperature=0.2,
+                    max_tokens=4096
                 )
 
                 usage_tracker.record_response(model_name, response)
@@ -311,7 +323,11 @@ def generate_code_with_fallback(prompt, usage_tracker):
                 if extracted_files:
                     return extracted_files
                 else:
-                    print(f"⚠️ [Parse Warning] Groq model '{model_name}' produced no extractable file blocks. Retrying with next candidate...")
+                    print(f"⚠️ [Parse Warning] Groq model '{model_name}' produced no extractable file blocks.")
+                    print("\n🔍 [DEBUG: Raw Model Output Preview (First 300 chars)]")
+                    print("─" * 55)
+                    print(text_content[:300] if text_content else "<EMPTY RESPONSE>")
+                    print("─" * 55 + "\n")
                     break
 
             except RateLimitError as e:
@@ -323,6 +339,16 @@ def generate_code_with_fallback(prompt, usage_tracker):
                     print(f"\n🛑 [Hard Error] All {total_models} Groq candidate models failed due to Rate Limits.")
                     usage_tracker.display_summary()
                     sys.exit(1)
+
+            except APIConnectionError as e:
+                server_retry_count += 1
+                print(f"⚠️ [Connection Warning] Network error contacting Groq endpoint: {e}")
+                if server_retry_count < max_server_retries:
+                    print(f"🔄 Retrying request ({server_retry_count}/{max_server_retries}) in 3.0s...")
+                    time.sleep(3.0)
+                else:
+                    print(f"⚠️ Network error persisted on model '{model_name}'. Falling back to next candidate model...\n")
+                    break
 
             except InternalServerError as e:
                 server_retry_count += 1
@@ -340,6 +366,9 @@ def generate_code_with_fallback(prompt, usage_tracker):
                         break
                     else:
                         sys.exit(1)
+                elif code == 404 or "model_not_found" in str(body):
+                    print(f"⚠️ Model '{model_name}' returned 404. Falling back to next candidate model...\n")
+                    break
                 else:
                     print(f"\n🛑 [API Error ({code})]\n{json.dumps(body, indent=2) if isinstance(body, dict) else body}")
                     sys.exit(1)
@@ -389,13 +418,13 @@ Please review this code and return your evaluation in JSON format.
                         {"role": "system", "content": REVIEWER_SYSTEM_PROMPT},
                         {"role": "user", "content": review_prompt}
                     ],
-                    temperature=0.1
+                    temperature=0.1,
+                    max_tokens=2048
                 )
                 
                 usage_tracker.record_response(model_name, response)
                 raw_text = response.choices[0].message.content if response.choices else ""
                 
-                # Strip markdown JSON fences if returned by the model
                 clean_json_str = re.sub(r"^```json\s*", "", raw_text.strip(), flags=re.IGNORECASE)
                 clean_json_str = re.sub(r"\s*```$", "", clean_json_str).strip()
 
@@ -420,6 +449,16 @@ Please review this code and return your evaluation in JSON format.
                     usage_tracker.display_summary()
                     sys.exit(1)
 
+            except APIConnectionError as e:
+                server_retry_count += 1
+                print(f"⚠️ [Connection Warning] Network error contacting Groq endpoint: {e}")
+                if server_retry_count < max_server_retries:
+                    print(f"🔄 Retrying request ({server_retry_count}/{max_server_retries}) in 3.0s...")
+                    time.sleep(3.0)
+                else:
+                    print(f"⚠️ Network error persisted on model '{model_name}'. Falling back to next candidate model...\n")
+                    break
+
             except InternalServerError as e:
                 server_retry_count += 1
                 if server_retry_count < max_server_retries:
@@ -436,6 +475,9 @@ Please review this code and return your evaluation in JSON format.
                         break
                     else:
                         sys.exit(1)
+                elif code == 404 or "model_not_found" in str(body):
+                    print(f"⚠️ Reviewer model '{model_name}' returned 404. Falling back to next candidate model...\n")
+                    break
                 else:
                     print(f"\n🛑 [API Error ({code})]\n{json.dumps(body, indent=2) if isinstance(body, dict) else body}")
                     sys.exit(1)
