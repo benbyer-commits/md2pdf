@@ -1,28 +1,39 @@
+import datetime
 import json
 import os
 import re
 import subprocess
 import sys
 import time
-from google import genai
-from google.genai import types
-from google.genai import errors
+from openai import OpenAI, APIError, RateLimitError, InternalServerError
 
-client = genai.Client()
+# Initialize Groq Client via OpenAI-compatible endpoint
+API_KEY = os.environ.get("GROQ_API_KEY")
+if not API_KEY:
+    print("[Error] GROQ_API_KEY environment variable is not set.")
+    print("Export your key with: export GROQ_API_KEY=\"gsk_...\"")
+    sys.exit(1)
+
+client = OpenAI(
+    api_key=API_KEY,
+    base_url="https://api.groq.com/openai/v1"
+)
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 DOCS_DIR = os.path.join(PROJECT_ROOT, "docs")
 TASKS_FILE = os.path.join(DOCS_DIR, "tasks.json")
 SPEC_FILE = os.path.join(DOCS_DIR, "spec.md")
+USAGE_FILE = os.path.join(PROJECT_ROOT, ".factory_usage.json")
 
 CODER_CANDIDATE_MODELS = [
-    "gemini-3.8-flash",
-    "gemini-3.7-flash"
+    "openai/gpt-oss-120b",
+    "qwen/qwen3.8-27b",
+    "openai/gpt-oss-20b"
 ]
 
 REVIEWER_CANDIDATE_MODELS = [
-    "gemini-3.8-flash",
-    "gemini-3.7-flash"
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b"
 ]
 
 CODER_SYSTEM_PROMPT = """
@@ -65,6 +76,117 @@ MUST RETURN JSON ONLY matching this exact structure:
 }
 Do NOT include markdown formatting or wrapping outside the JSON object.
 """
+
+# --- USAGE TELEMETRY TRACKER ---
+
+class UsageTracker:
+    def __init__(self):
+        self.run_requests = 0
+        self.run_prompt_tokens = 0
+        self.run_candidate_tokens = 0
+        self.run_total_tokens = 0
+        self.model_breakdown = {}
+
+    def record_response(self, model_name, response):
+        self.run_requests += 1
+        
+        usage = getattr(response, 'usage', None)
+        prompt_tokens = getattr(usage, 'prompt_tokens', 0) if usage else 0
+        candidate_tokens = getattr(usage, 'completion_tokens', 0) if usage else 0
+        total_tokens = getattr(usage, 'total_tokens', 0) if usage else (prompt_tokens + candidate_tokens)
+
+        self.run_prompt_tokens += prompt_tokens
+        self.run_candidate_tokens += candidate_tokens
+        self.run_total_tokens += total_tokens
+
+        if model_name not in self.model_breakdown:
+            self.model_breakdown[model_name] = {
+                "requests": 0,
+                "prompt_tokens": 0,
+                "candidate_tokens": 0,
+                "total_tokens": 0
+            }
+        
+        self.model_breakdown[model_name]["requests"] += 1
+        self.model_breakdown[model_name]["prompt_tokens"] += prompt_tokens
+        self.model_breakdown[model_name]["candidate_tokens"] += candidate_tokens
+        self.model_breakdown[model_name]["total_tokens"] += total_tokens
+
+    def get_and_update_daily_totals(self):
+        today_str = datetime.date.today().isoformat()
+        
+        daily_data = {
+            "date": today_str,
+            "requests": 0,
+            "prompt_tokens": 0,
+            "candidate_tokens": 0,
+            "total_tokens": 0
+        }
+
+        if os.path.exists(USAGE_FILE):
+            try:
+                with open(USAGE_FILE, "r", encoding="utf-8") as f:
+                    stored = json.load(f)
+                    if stored.get("date") == today_str:
+                        daily_data["requests"] = stored.get("requests", 0)
+                        daily_data["prompt_tokens"] = stored.get("prompt_tokens", 0)
+                        daily_data["candidate_tokens"] = stored.get("candidate_tokens", 0)
+                        daily_data["total_tokens"] = stored.get("total_tokens", 0)
+            except Exception:
+                pass
+
+        daily_data["requests"] += self.run_requests
+        daily_data["prompt_tokens"] += self.run_prompt_tokens
+        daily_data["candidate_tokens"] += self.run_candidate_tokens
+        daily_data["total_tokens"] += self.run_total_tokens
+
+        try:
+            with open(USAGE_FILE, "w", encoding="utf-8") as f:
+                json.dump(daily_data, f, indent=2)
+        except Exception as e:
+            print(f"⚠️ Could not update daily usage file: {e}")
+
+        return daily_data
+
+    def display_summary(self):
+        daily_totals = self.get_and_update_daily_totals()
+
+        print("\n" + "═" * 65)
+        print("📊 GROQ TELEMETRY & USAGE SUMMARY")
+        print("═" * 65)
+        print(f"🔹 CURRENT RUN METRICS:")
+        print(f"   • API Requests Executed:    {self.run_requests}")
+        print(f"   • Prompt (Input) Tokens:    {self.run_prompt_tokens:,}")
+        print(f"   • Candidate (Output) Tokens:{self.run_candidate_tokens:,}")
+        print(f"   • Total Run Tokens:         {self.run_total_tokens:,}")
+        
+        if self.model_breakdown:
+            print("   • Breakdown by Model:")
+            for m_name, m_stats in self.model_breakdown.items():
+                print(f"     └─ [{m_name}] Requests: {m_stats['requests']} | Input: {m_stats['prompt_tokens']:,} | Output: {m_stats['candidate_tokens']:,}")
+
+        print(f"\n📅 CUMULATIVE DAILY TOTALS ({daily_totals['date']}):")
+        print(f"   • Total API Requests Today: {daily_totals['requests']}")
+        print(f"   • Total Input Tokens Today:  {daily_totals['prompt_tokens']:,}")
+        print(f"   • Total Output Tokens Today: {daily_totals['candidate_tokens']:,}")
+        print(f"   • Grand Total Tokens Today:  {daily_totals['total_tokens']:,}")
+        print("═" * 65 + "\n")
+
+# --- CONCISE 429 PARSER ---
+
+def parse_429_error(error, model_name):
+    raw_msg = str(error)
+
+    print("\n" + "─" * 60)
+    print(f"⚠️  429 RATE LIMIT | Groq Model: {model_name}")
+    print("─" * 60)
+    print(f"  • Provider:     Groq")
+    print(f"  • Reason:       Rate limit or token per minute (TPM) limit exceeded")
+    print(f"  • Raw Error:    {raw_msg.splitlines()[0] if raw_msg else '429 Rate Limit'}")
+    print(f"  • Console Link: https://console.groq.com/settings/limits")
+    print("─" * 60)
+
+# --- GIT AUTOMATION HELPERS ---
 
 def run_git(args, check=True):
     result = subprocess.run(
@@ -125,6 +247,8 @@ def abort_task_git(task_id):
     run_git(["checkout", "main"], check=False)
     run_git(["branch", "-D", branch_name], check=False)
 
+# --- FILE HELPERS ---
+
 def load_file(path):
     if not os.path.exists(path):
         print(f"[Error] Required spec file not found: {path}")
@@ -158,54 +282,66 @@ def extract_file_blocks(llm_response_text):
         files[clean_path] = content.strip()
     return files
 
-def generate_code_with_fallback(prompt):
-    config = types.GenerateContentConfig(
-        system_instruction=CODER_SYSTEM_PROMPT,
-        temperature=0.2,
-        max_output_tokens=8192,
-    )
+# --- AGENT CALLS ---
+
+def generate_code_with_fallback(prompt, usage_tracker):
+    total_models = len(CODER_CANDIDATE_MODELS)
 
     for model_idx, model_name in enumerate(CODER_CANDIDATE_MODELS, start=1):
-        print(f"📡 Requesting Coder Agent using model: {model_name} (Candidate {model_idx}/{len(CODER_CANDIDATE_MODELS)})")
+        print(f"📡 Requesting Groq Coder Agent using model: {model_name} (Candidate {model_idx}/{total_models})")
         
         max_server_retries = 3
         server_retry_count = 0
 
         while server_retry_count < max_server_retries:
             try:
-                response = client.models.generate_content(
+                response = client.chat.completions.create(
                     model=model_name,
-                    contents=prompt,
-                    config=config,
+                    messages=[
+                        {"role": "system", "content": CODER_SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.2,
                 )
 
-                text_content = getattr(response, 'text', None)
+                usage_tracker.record_response(model_name, response)
+                text_content = response.choices[0].message.content if response.choices else ""
                 extracted_files = extract_file_blocks(text_content)
 
                 if extracted_files:
                     return extracted_files
                 else:
-                    print(f"⚠️ [Parse Warning] Coder model '{model_name}' produced no extractable file blocks. Retrying with next candidate...")
+                    print(f"⚠️ [Parse Warning] Groq model '{model_name}' produced no extractable file blocks. Retrying with next candidate...")
                     break
 
-            except errors.APIError as e:
-                code = getattr(e, 'code', None) or getattr(e, 'status_code', None)
-                message = str(e)
-
-                if code == 429 or "RESOURCE_EXHAUSTED" in message or "Quota exceeded" in message:
-                    print(f"\n🛑 [Rate Limit / Quota Exceeded (429)] {message}")
+            except RateLimitError as e:
+                parse_429_error(e, model_name)
+                if model_idx < total_models:
+                    print(f"🔄 Treating 429 on '{model_name}' as transitory. Falling back to next model ({model_idx+1}/{total_models})...\n")
+                    break
+                else:
+                    print(f"\n🛑 [Hard Error] All {total_models} Groq candidate models failed due to Rate Limits.")
+                    usage_tracker.display_summary()
                     sys.exit(1)
-                elif code == 503 or "UNAVAILABLE" in message or "high demand" in message.lower():
-                    print(f"⚠️ [High Demand (503)] Coder model '{model_name}' overloaded.")
-                    break
-                elif code in [500, 502, 504] or "INTERNAL" in message:
-                    server_retry_count += 1
-                    if server_retry_count < max_server_retries:
-                        time.sleep(2.0)
+
+            except InternalServerError as e:
+                server_retry_count += 1
+                if server_retry_count < max_server_retries:
+                    time.sleep(2.0)
+                else:
+                    sys.exit(1)
+
+            except APIError as e:
+                code = getattr(e, 'status_code', None) or getattr(e, 'code', None)
+                body = getattr(e, 'body', None) or str(e)
+                if code == 429:
+                    parse_429_error(e, model_name)
+                    if model_idx < total_models:
+                        break
                     else:
                         sys.exit(1)
-                elif code in [401, 403, 404, 400]:
-                    print(f"\n🛑 [Permanent API Error ({code})] {message}")
+                else:
+                    print(f"\n🛑 [API Error ({code})]\n{json.dumps(body, indent=2) if isinstance(body, dict) else body}")
                     sys.exit(1)
 
             except Exception as e:
@@ -215,12 +351,13 @@ def generate_code_with_fallback(prompt):
                 else:
                     sys.exit(1)
 
-        print(f"🔄 Switching Coder from '{model_name}' to next candidate model...\n")
+        print(f"🔄 Switching Groq Coder from '{model_name}' to next candidate model...\n")
 
-    print(f"\n🛑 [Pipeline Failure] All Coder candidate models failed to produce valid outputs.")
+    print(f"\n🛑 [Pipeline Failure] All Coder candidate models failed.")
+    usage_tracker.display_summary()
     sys.exit(1)
 
-def audit_code_with_reviewer(spec_content, task, extracted_files):
+def audit_code_with_reviewer(spec_content, task, extracted_files, usage_tracker):
     review_prompt = f"""
 PROJECT SPECIFICATION:
 {spec_content}
@@ -236,56 +373,71 @@ GENERATED CODE TO AUDIT:
 Please review this code and return your evaluation in JSON format.
 """
 
-    config = types.GenerateContentConfig(
-        system_instruction=REVIEWER_SYSTEM_PROMPT,
-        temperature=0.1,
-        response_mime_type="application/json",
-    )
+    total_models = len(REVIEWER_CANDIDATE_MODELS)
 
     for model_idx, model_name in enumerate(REVIEWER_CANDIDATE_MODELS, start=1):
-        print(f"🔍 Requesting Reviewer Agent using model: {model_name} (Candidate {model_idx}/{len(REVIEWER_CANDIDATE_MODELS)})")
+        print(f"🔍 Requesting Groq Reviewer Agent using model: {model_name} (Candidate {model_idx}/{total_models})")
         
         max_server_retries = 3
         server_retry_count = 0
 
         while server_retry_count < max_server_retries:
             try:
-                response = client.models.generate_content(
+                response = client.chat.completions.create(
                     model=model_name,
-                    contents=review_prompt,
-                    config=config,
+                    messages=[
+                        {"role": "system", "content": REVIEWER_SYSTEM_PROMPT},
+                        {"role": "user", "content": review_prompt}
+                    ],
+                    temperature=0.1
                 )
                 
-                raw_text = getattr(response, 'text', '') or ''
+                usage_tracker.record_response(model_name, response)
+                raw_text = response.choices[0].message.content if response.choices else ""
+                
+                # Strip markdown JSON fences if returned by the model
+                clean_json_str = re.sub(r"^```json\s*", "", raw_text.strip(), flags=re.IGNORECASE)
+                clean_json_str = re.sub(r"\s*```$", "", clean_json_str).strip()
+
                 try:
-                    review_data = json.loads(raw_text)
+                    review_data = json.loads(clean_json_str)
                     if isinstance(review_data, dict) and "approved" in review_data:
                         return review_data
                     else:
-                        print(f"⚠️ [Parse Warning] Reviewer model '{model_name}' returned incomplete JSON structure. Retrying with next candidate...")
+                        print(f"⚠️ [Parse Warning] Reviewer model '{model_name}' returned incomplete JSON. Retrying with next candidate...")
                         break
                 except json.JSONDecodeError:
                     print(f"⚠️ [Parse Warning] Reviewer model '{model_name}' returned malformed JSON. Retrying with next candidate...")
                     break
 
-            except errors.APIError as e:
-                code = getattr(e, 'code', None) or getattr(e, 'status_code', None)
-                message = str(e)
-
-                if code == 429 or "RESOURCE_EXHAUSTED" in message or "Quota exceeded" in message:
-                    print(f"\n🛑 [Rate Limit / Quota Exceeded (429)] {message}")
-                    sys.exit(1)
-                elif code == 503 or "UNAVAILABLE" in message or "high demand" in message.lower():
-                    print(f"⚠️ [High Demand (503)] Reviewer model '{model_name}' overloaded.")
+            except RateLimitError as e:
+                parse_429_error(e, model_name)
+                if model_idx < total_models:
+                    print(f"🔄 Treating 429 on '{model_name}' as transitory. Falling back to next model ({model_idx+1}/{total_models})...\n")
                     break
-                elif code in [500, 502, 504] or "INTERNAL" in message:
-                    server_retry_count += 1
-                    if server_retry_count < max_server_retries:
-                        time.sleep(2.0)
+                else:
+                    print(f"\n🛑 [Hard Error] All {total_models} Groq Reviewer candidate models failed due to Rate Limits.")
+                    usage_tracker.display_summary()
+                    sys.exit(1)
+
+            except InternalServerError as e:
+                server_retry_count += 1
+                if server_retry_count < max_server_retries:
+                    time.sleep(2.0)
+                else:
+                    sys.exit(1)
+
+            except APIError as e:
+                code = getattr(e, 'status_code', None) or getattr(e, 'code', None)
+                body = getattr(e, 'body', None) or str(e)
+                if code == 429:
+                    parse_429_error(e, model_name)
+                    if model_idx < total_models:
+                        break
                     else:
                         sys.exit(1)
-                elif code in [401, 403, 404, 400]:
-                    print(f"\n🛑 [Permanent API Error ({code})] {message}")
+                else:
+                    print(f"\n🛑 [API Error ({code})]\n{json.dumps(body, indent=2) if isinstance(body, dict) else body}")
                     sys.exit(1)
 
             except Exception as e:
@@ -295,13 +447,15 @@ Please review this code and return your evaluation in JSON format.
                 else:
                     sys.exit(1)
 
-        print(f"🔄 Switching Reviewer from '{model_name}' to next candidate model...\n")
+        print(f"🔄 Switching Groq Reviewer from '{model_name}' to next candidate model...\n")
 
-    print(f"\n🛑 [Pipeline Failure] All Reviewer candidate models failed to produce a valid audit.")
+    print(f"\n🛑 [Pipeline Failure] All Reviewer candidate models failed.")
+    usage_tracker.display_summary()
     sys.exit(1)
 
+# --- TEST EXECUTION & SELF-HEALING ---
+
 def execute_npm_tests():
-    """Executes 'npm test -- --verbose' via subprocess and prints detailed output on failure."""
     print("🧪 Running automated test suite ('npm test')...")
     try:
         result = subprocess.run(
@@ -318,12 +472,11 @@ def execute_npm_tests():
             print("  └── ❌ Test suite failed!")
             error_log = (result.stdout or "") + "\n" + (result.stderr or "")
             
-            # Print explicit, formatted failure trace to terminal output
-            print("\n" + "─" * 60)
+            print("\n" + "─" * 65)
             print("🚨 DETAILED TEST FAILURE LOGS:")
-            print("─" * 60)
+            print("─" * 65)
             print(error_log.strip())
-            print("─" * 60 + "\n")
+            print("─" * 65 + "\n")
             
             return False, error_log.strip()
     except Exception as e:
@@ -332,7 +485,6 @@ def execute_npm_tests():
         return False, err_msg
 
 def execute_npm_link():
-    """Links the local package globally so 'md2pdf' can be executed system-wide."""
     print("🔗 Linking package globally ('npm link')...")
     try:
         result = subprocess.run(
@@ -352,11 +504,11 @@ def execute_npm_link():
         print(f"  └── ❌ Error executing npm link: {str(e)}")
         return False
 
-def run_auto_fix_loop(spec_content, initial_error_log, max_fix_attempts=3):
+def run_auto_fix_loop(spec_content, initial_error_log, usage_tracker, max_fix_attempts=3):
     current_error = initial_error_log
 
     for attempt in range(1, max_fix_attempts + 1):
-        print(f"\n🛠️ [Test Fix Loop {attempt}/{max_fix_attempts}] Sending error logs to Coder Agent...")
+        print(f"\n🛠️ [Test Fix Loop {attempt}/{max_fix_attempts}] Sending error logs to Groq Coder Agent...")
         
         fix_prompt = f"""
 PROJECT SPECIFICATION:
@@ -368,7 +520,7 @@ TEST FAILURE LOGS:
 INSTRUCTION:
 The current codebase failed the automated test suite. Analyze the error trace above, identify the failing logic in the generated files, and return corrected versions of the broken target files.
 """
-        extracted_files = generate_code_with_fallback(fix_prompt)
+        extracted_files = generate_code_with_fallback(fix_prompt, usage_tracker)
         
         for rel_path, content in extracted_files.items():
             safe_rel_path = rel_path.lstrip("./")
@@ -387,7 +539,7 @@ The current codebase failed the automated test suite. Analyze the error trace ab
     print(f"🛑 Test auto-fix loop reached maximum attempts ({max_fix_attempts}) without passing tests.")
     return False
 
-def run_task(task, spec_content):
+def run_task(task, spec_content, usage_tracker):
     task_id = task.get("id")
     title = task.get("title")
     target_files = task.get("target_files", [])
@@ -420,9 +572,9 @@ Please generate the code for the target files required for this task.
     extracted_files = {}
 
     for review_attempt in range(1, max_review_attempts + 1):
-        extracted_files = generate_code_with_fallback(coder_prompt)
+        extracted_files = generate_code_with_fallback(coder_prompt, usage_tracker)
         
-        review = audit_code_with_reviewer(spec_content, task, extracted_files)
+        review = audit_code_with_reviewer(spec_content, task, extracted_files, usage_tracker)
         
         approved = review.get("approved", False)
         score = review.get("score", 0)
@@ -473,7 +625,7 @@ Please revise the code to resolve all identified issues and satisfy acceptance c
         passed, log = execute_npm_tests()
         if not passed:
             print("⚠️ Initial tests failed on feature branch. Starting auto-fix loop...")
-            passed = run_auto_fix_loop(spec_content, log)
+            passed = run_auto_fix_loop(spec_content, log, usage_tracker)
             if not passed:
                 abort_task_git(task_id)
                 return False
@@ -482,10 +634,6 @@ Please revise the code to resolve all identified issues and satisfy acceptance c
     return True
 
 def main():
-    if "GEMINI_API_KEY" not in os.environ:
-        print("[Error] GEMINI_API_KEY environment variable is not set.")
-        sys.exit(1)
-
     ensure_git_environment()
 
     spec_content = load_file(SPEC_FILE)
@@ -493,6 +641,8 @@ def main():
 
     tasks = tasks_data.get("tasks", [])
     print(f"Found {len(tasks)} tasks in pipeline.")
+
+    usage_tracker = UsageTracker()
 
     for task in tasks:
         task_id = task.get("id")
@@ -502,9 +652,10 @@ def main():
             print(f"⏩ Skipping {task_id} ({title}): Target files already present on main.")
             continue
 
-        success = run_task(task, spec_content)
+        success = run_task(task, spec_content, usage_tracker)
         if not success:
             print(f"❌ Aborting pipeline execution due to failure at {task_id}.")
+            usage_tracker.display_summary()
             sys.exit(1)
 
     link_success = True
@@ -515,6 +666,8 @@ def main():
         print("\n✅ Factory pipeline execution, verification, git merges, and CLI linking complete!")
     else:
         print("\n⚠️ Factory pipeline completed task execution and git merges, but CLI linking failed. Fix npm permissions and run 'npm link' manually.")
+
+    usage_tracker.display_summary()
 
 if __name__ == "__main__":
     main()
